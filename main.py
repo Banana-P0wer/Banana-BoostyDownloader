@@ -22,7 +22,7 @@ except Exception as e:
 
 
 async def main():
-    raw_creator_name = input("Enter creator boosty link or user name > ")
+    raw_creator_name = conf.creator_name or input("Enter creator boosty link or user name > ")
     parsed_creator_name = parse_creator_name(raw_creator_name)
     if parsed_creator_name.replace(" ", "") == "":
         logger.critical("Empty creator name, exit")
