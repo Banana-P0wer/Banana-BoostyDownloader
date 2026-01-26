@@ -31,6 +31,7 @@ class Config:
 
     storage_type: Literal["post", "media"]
     desired_post_id: Optional[str]
+    creator_name: Optional[str]
 
     save_logs_to_file: bool
     post_text_in_markdown: bool
@@ -52,6 +53,11 @@ class Config:
             help="Specify the id of the only post that needs to be synchronized. "
                  "Available only in post synchronization mode."
         )
+        self.__arg_parser.add_argument(
+            '-a',
+            '--author',
+            help="Specify the creator boosty link or user name to avoid prompt."
+        )
         self.__load()
 
     def __load(self):
@@ -60,6 +66,7 @@ class Config:
             args = self.__arg_parser.parse_args()
             cfg_path = args.config or cfg_path
             self.desired_post_id = args.post_id
+            self.creator_name = args.author
 
         self.__cfg_path = Path(cfg_path)
         try:
