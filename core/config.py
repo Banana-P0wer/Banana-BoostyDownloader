@@ -32,6 +32,7 @@ class Config:
     storage_type: Literal["post", "media"]
     desired_post_id: Optional[str]
     creator_name: Optional[str]
+    auto_confirm_download: bool
 
     save_logs_to_file: bool
     post_text_in_markdown: bool
@@ -96,6 +97,7 @@ class Config:
         self.need_load_audio = True
         self.need_load_files = True
         self.storage_type = content_conf.get("storage_type")
+        self.auto_confirm_download = bool(content_conf.get("auto_confirm_download", False))
         self.post_text_in_markdown = bool(content_conf.get("post_text_in_markdown", True))
         self.save_metadata = bool(content_conf.get("save_metadata", True))
         self.save_logs_to_file = bool(logging_conf.get("enable_file_logging", False))

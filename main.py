@@ -45,8 +45,9 @@ async def main():
         need_load_files=conf.need_load_files,
         storage_type=conf.storage_type,
     )
-    if not parse_bool(input("Proceed? (y/n) > ")):
-        raise SyncCancelledExc
+    if not conf.auto_confirm_download:
+        if not parse_bool(input("Proceed? (y/n) > ")):
+            raise SyncCancelledExc
 
     if not os.path.isdir(conf.sync_dir):
         logger.critical(f"path {conf.sync_dir} is not exists. create it and try again.")
