@@ -32,6 +32,7 @@ class Config:
     storage_type: Literal["post", "media"]
     desired_post_id: Optional[str]
     creator_name: Optional[str]
+    post_link: Optional[str]
     auto_confirm_download: bool
 
     save_logs_to_file: bool
@@ -57,7 +58,12 @@ class Config:
         self.__arg_parser.add_argument(
             '-a',
             '--author',
-            help="Specify the creator boosty link or user name to avoid prompt."
+            help="Specify the creator user name to avoid prompt."
+        )
+        self.__arg_parser.add_argument(
+            '-l',
+            '--link',
+            help="Specify the full boosty link to auto-detect author and post id."
         )
         self.__load()
 
@@ -68,6 +74,7 @@ class Config:
             cfg_path = args.config or cfg_path
             self.desired_post_id = args.post_id
             self.creator_name = args.author
+            self.post_link = args.link
 
         self.__cfg_path = Path(cfg_path)
         try:

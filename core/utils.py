@@ -21,11 +21,16 @@ async def create_text_document(path: Path, content: str, ext: str = "txt", name:
         await file.write(content)
 
 
+def parse_boosty_link(raw_input: str) -> tuple[str, Optional[str]]:
+    match = re.search(r"boosty\.to/([^/\s]+)/?(?:posts/([0-9a-fA-F-]+))?", raw_input)
+    if match is None:
+        return raw_input, None
+    return match.group(1), match.group(2)
+
+
 def parse_creator_name(raw_input: str) -> str:
-    search = re.search(r"^.*?(boosty\.to/(.*?)/?)$", raw_input)
-    if search is None:
-        return raw_input
-    return search.group(2)
+    creator_name, _ = parse_boosty_link(raw_input)
+    return creator_name
 
 
 def parse_bool(raw_input: str) -> bool:
