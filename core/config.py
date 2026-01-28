@@ -39,6 +39,7 @@ class Config:
     post_text_in_markdown: bool
     save_metadata: bool
     logs_path: Path
+    final_statistics_table: bool
 
     default_sd_file_name: str
 
@@ -109,6 +110,7 @@ class Config:
         self.save_metadata = bool(content_conf.get("save_metadata", True))
         self.save_logs_to_file = bool(logging_conf.get("enable_file_logging", False))
         self.logs_path = Path(logging_conf.get("logs_path", "./"))
+        self.final_statistics_table = bool(logging_conf.get("final_statistics_table", True))
         self.debug = bool(logging_conf.get("debug", False))
         collect: Optional[List[str]] = content_conf.get("collect", "media")
         if collect:

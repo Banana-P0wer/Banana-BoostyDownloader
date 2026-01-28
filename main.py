@@ -120,7 +120,8 @@ async def main():
             sync_data=sync_data
         )
     await get_profile_stat(parsed_creator_name)
-    stat_tracker.show_summary()
+    if conf.final_statistics_table:
+        stat_tracker.show_summary()
 
 
 if __name__ == "__main__":

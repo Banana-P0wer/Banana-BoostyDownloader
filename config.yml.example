@@ -50,7 +50,9 @@ content:
 # Параметры логирования
 logging:
   # Сохранять лог в файл
-  enable_file_logging: False
+  enable_file_logging: false
+  # Печатать ли финальную таблицу статистики (true/false)
+  final_statistics_table: true
   # Путь к папке, куда следует класть логи
   logs_path: ./
-  debug: False
+  debug: false
