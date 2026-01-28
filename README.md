@@ -32,7 +32,7 @@
 
 Также можно передать сразу ссылку через `-l <полная_ссылка>`
 ```shell
-./boosty_downloader.exe -l https://boosty.to/antonovtakoiantonov/posts/13725b31-5a58-408b-a16e-b5499920ba8a
+./boosty_downloader.exe -l "https://boosty.to/autorsname/posts/abcdefgh-ijkl-mnop-qrst-uvwxyz123456"
 ```
 
 ### Важно знать
