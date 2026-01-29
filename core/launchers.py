@@ -295,6 +295,7 @@ async def fetch_and_save_lonely_post(
     for post in post_pool.get_posts():
         tasks = []
         counters_before = stat_tracker.get_counters()
+        incomplete_before = stat_tracker.get_incomplete_count()
         post_path = posts_path / post.id
         if conf.enable_post_masquerade:
             existing_post_data = post_db_client.get_post(post.id)
@@ -352,6 +353,7 @@ async def fetch_and_save_lonely_post(
         downloaded_delta = counters_after["downloaded"] - counters_before["downloaded"]
         errors_delta = counters_after["errors"] - counters_before["errors"]
         passed_delta = counters_after["passed"] - counters_before["passed"]
+        incomplete_delta = stat_tracker.get_incomplete_count() - incomplete_before
         if errors_delta > 0:
             any_errors = True
         if downloaded_delta == 0 and errors_delta == 0:
@@ -363,6 +365,8 @@ async def fetch_and_save_lonely_post(
         elif downloaded_delta > 0 and errors_delta == 0:
             logger.info(f"{AsciiCommands.COLORIZE_HIGHLIGHT.value}Download complete{AsciiCommands.COLORIZE_DEFAULT.value}")
             any_downloaded = True
+        if incomplete_delta > 0:
+            any_skipped = True
 
     if post_db_client:
         post_db_client.close()

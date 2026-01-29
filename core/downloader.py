@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Literal, Any, Optional
 
-from boosty.api import download_file
+from boosty.api import download_file, get_content_length
 from boosty.wrappers.media_pool import MediaPool
 from core.defs import ContentType
 from core.logger import logger
@@ -32,11 +32,34 @@ class Downloader:
             path: Path,
             metadata: Optional[dict[str, Any]] = None
     ) -> bool:
+        part_path = Path(str(path) + ".part")
+        if part_path.exists():
+            logger.info(f"Found incomplete file part, deleting: {part_path}")
+            try:
+                part_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to delete incomplete part file: {part_path} ({e})")
+
         if os.path.isfile(path):
+            expected_len = None
+            if ".m3u8" not in file_url.lower():
+                expected_len = await get_content_length(file_url)
+            if expected_len:
+                actual_len = os.path.getsize(path)
+                if actual_len < expected_len * 0.8:
+                    logger.warning("File already exists but appears to be incomplete or corrupted")
+                    stat_tracker.add_incomplete_file(str(path))
             logger.debug(f"Skip saving file {path}: already exists")
             return False
+
         logger.info(f"Will save file: {path}")
-        result = await download_file(file_url, path)
+        result = await download_file(file_url, part_path)
+        if result:
+            try:
+                os.replace(part_path, path)
+            except Exception as e:
+                logger.warning(f"Failed to finalize download for {path}: {e}")
+                raise
         if self._save_meta and result and metadata:
             logger.info(f"Write metadata to file {path}")
             await write_video_metadata(path, metadata)

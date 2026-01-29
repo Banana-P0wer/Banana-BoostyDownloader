@@ -141,7 +141,8 @@ async def download_file(url: str, path: Path) -> bool:
                     async with aiofiles.open(path, "wb") as file:
                         try:
                             logger.info(f"Saving file {path}")
-                            logger.info(f"File size: {round(length / 1024 / 1024, 2)} (MB)")
+                            if length is not None:
+                                logger.info(f"File size: {round(length / 1024 / 1024, 2)} (MB)")
                             chunk_size = conf.download_chunk_size
                             downloaded_bytes = 0
                             last_log = time.monotonic()
@@ -150,17 +151,39 @@ async def download_file(url: str, path: Path) -> bool:
                             async for content in response.content.iter_chunked(chunk_size):
                                 if time.monotonic() - last_log > 30.0:
                                     downloaded = downloaded_bytes if downloaded_bytes > 0 else 1
-                                    download_percent = int(downloaded / length * 100)
+                                    if length:
+                                        download_percent = int(downloaded / length * 100)
+                                        progress = f"{download_percent}%"
+                                    else:
+                                        progress = f"{downloaded // (1024 * 1024)} MB"
                                     last_log = time.monotonic()
                                     elapsed = last_log - start_time
-                                    total_time = round(elapsed * (length / downloaded), 2)
-                                    estimated = total_time - elapsed
-                                    logger.info(f"Still downloading file... {download_percent}% "
-                                                f"(ela: {int(elapsed) // 60} min; eta: {int(estimated) // 60} min.)")
+                                    if length:
+                                        total_time = round(elapsed * (length / downloaded), 2)
+                                        estimated = total_time - elapsed
+                                        logger.info(f"Still downloading file... {progress} "
+                                                    f"(ela: {int(elapsed) // 60} min; eta: {int(estimated) // 60} min.)")
+                                    else:
+                                        logger.info(f"Still downloading file... {progress} "
+                                                    f"(ela: {int(elapsed) // 60} min)")
                                 await file.write(content)  # noqa
                                 downloaded_bytes += len(content)  # noqa
                         except Exception as e:
                             logger.warning(f"Failed to write file {path}: {e}, trying again")
+                            await asyncio.sleep(0.5)
+                            continue
+                    if length is not None:
+                        diff_ratio = abs(downloaded_bytes - length) / length if length else 0
+                        if diff_ratio > 0.05:
+                            logger.warning(
+                                f"Downloaded size mismatch for {path}: "
+                                f"expected {length}, got {downloaded_bytes} "
+                                f"({round(diff_ratio * 100, 1)}%)"
+                            )
+                            try:
+                                path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
                             await asyncio.sleep(0.5)
                             continue
                     return True
@@ -180,6 +203,25 @@ async def download_file(url: str, path: Path) -> bool:
         logger.error(f"{e}")
         stat_tracker.add_download_error(url)
         raise e
+
+
+async def get_content_length(url: str) -> Optional[int]:
+    headers = copy(DEFAULT_HEADERS)
+    try:
+        async with ClientSession() as session:
+            async with session.head(url, headers=headers, allow_redirects=True) as resp:
+                if resp.status in (200, 206):
+                    length = resp.headers.get("Content-Length")
+                    return int(length) if length else None
+
+            headers["Range"] = "bytes=0-0"
+            async with session.get(url, headers=headers, allow_redirects=True) as resp:
+                if resp.status in (200, 206):
+                    length = resp.headers.get("Content-Length")
+                    return int(length) if length else None
+    except Exception:
+        return None
+    return None
 
 
 async def get_profile_stat(creator_name: str):

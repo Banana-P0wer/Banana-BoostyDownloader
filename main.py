@@ -96,6 +96,7 @@ async def main():
         succeeded_links = []
         skipped_links = []
         failed_links = []
+        incomplete_links = []
         for creator_name, post_id, raw_link in links_queue:
             base_path: Path = conf.sync_dir / creator_name
             cache_path = base_path / "__cache__"
@@ -113,6 +114,7 @@ async def main():
                     failed_links.append(raw_link)
                     continue
 
+            incomplete_before = stat_tracker.get_incomplete_count()
             status = await fetch_and_save_lonely_post(
                 creator_name=creator_name,
                 post_id=post_id,
@@ -121,6 +123,9 @@ async def main():
                 cache_path=cache_path,
                 sync_data=sync_data
             )
+            if stat_tracker.get_incomplete_count() > incomplete_before:
+                if raw_link not in incomplete_links:
+                    incomplete_links.append(raw_link)
             if status == "downloaded":
                 succeeded_links.append(raw_link)
             elif status == "skipped":
@@ -141,11 +146,54 @@ async def main():
                 f"{AsciiCommands.COLORIZE_WARNING.value}Skipped (already downloaded) links:"
                 f"{AsciiCommands.COLORIZE_DEFAULT.value}\n" + "\n".join(skipped_links)
             )
+            incomplete_files = stat_tracker.get_incomplete_files()
+            if incomplete_files:
+                logger.warning(
+                    "The following files appear to be incomplete or corrupted:\n"
+                    + "\n".join(incomplete_files)
+                )
+                print("Would you like to delete these files and try downloading them again to avoid potential issues?")
+                if parse_bool(input("Delete and re-download these files? (yes/no): ")):
+                    for file_path in incomplete_files:
+                        try:
+                            Path(file_path).unlink()
+                        except Exception as e:
+                            logger.warning(f"Failed to delete file {file_path}: {e}")
+                    stat_tracker.clear_incomplete_files()
+                    for link in incomplete_links:
+                        creator_name, post_id = parse_boosty_link(link)
+                        if not post_id:
+                            continue
+                        base_path = conf.sync_dir / creator_name
+                        cache_path = base_path / "__cache__"
+                        sync_data_file_path = cache_path / conf.default_sd_file_name
+                        create_dir_if_not_exists(base_path)
+                        create_dir_if_not_exists(cache_path)
+                        sync_data = None
+                        if conf.sync_offset_save:
+                            try:
+                                sync_data = await SyncData.get_or_create_sync_data(sync_data_file_path, creator_name)
+                            except Exception as e:
+                                logger.error(f"Failed to prepare sync data for {creator_name}: {e}")
+                                continue
+                        await fetch_and_save_lonely_post(
+                            creator_name=creator_name,
+                            post_id=post_id,
+                            use_cookie=use_cookie_in,
+                            base_path=base_path,
+                            cache_path=cache_path,
+                            sync_data=sync_data
+                        )
         if succeeded_links:
             logger.info(
                 f"{AsciiCommands.COLORIZE_HIGHLIGHT.value}Downloaded the following links:"
                 f"{AsciiCommands.COLORIZE_DEFAULT.value}\n" + "\n".join(succeeded_links)
             )
+        if conf.final_statistics_table:
+            unique_creators = {creator for creator, _, _ in links_queue}
+            if len(unique_creators) == 1:
+                await get_profile_stat(next(iter(unique_creators)))
+            stat_tracker.show_summary()
         return
 
     base_path: Path = conf.sync_dir / parsed_creator_name
