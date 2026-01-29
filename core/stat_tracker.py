@@ -116,6 +116,31 @@ class StatTracker:
     def show_summary(self):
         print("\n\n" + self.__str__())
 
+    def get_counters(self):
+        downloaded = (
+            self.__downloaded_photo +
+            self.__downloaded_video +
+            self.__downloaded_audio +
+            self.__downloaded_file
+        )
+        passed = (
+            self.__passed_photo +
+            self.__passed_video +
+            self.__passed_audio +
+            self.__passed_file
+        )
+        errors = (
+            self.__error_photo +
+            self.__error_video +
+            self.__error_audio +
+            self.__error_file
+        )
+        return {
+            "downloaded": downloaded,
+            "passed": passed,
+            "errors": errors,
+        }
+
 
 """ 
 Singleton only!

@@ -86,7 +86,7 @@ class TestSyncData:
 
         assert result is None
         mock_file_open.assert_called_once_with(test_path, "r")
-        mock_logger.assert_called_once_with(f"meta file is not exists at {test_path}")
+        mock_logger.assert_called_once_with(f"Meta file does not exist at {test_path}")
 
     @patch("builtins.open", new_callable=mock_open, read_data="invalid json")
     @patch("core.logger.logger.error")
@@ -99,7 +99,7 @@ class TestSyncData:
         assert result is None
         mock_file_open.assert_called_once_with(test_path, "r")
         assert mock_logger.call_count == 1
-        assert "Failed parse meta file" in mock_logger.call_args[0][0]
+        assert "Failed to parse meta file" in mock_logger.call_args[0][0]
 
     @patch("builtins.open", new_callable=mock_open, read_data=json.dumps({
         "invalid_key": "value"
@@ -113,7 +113,8 @@ class TestSyncData:
 
         assert result is None
         mock_file_open.assert_called_once_with(test_path, "r")
-        mock_logger.assert_called_once_with("Unknown meta file format, failed parse")
+        args, kwargs = mock_logger.call_args
+        assert args[0].startswith("Unknown meta file format; failed to parse.")
 
     @patch("builtins.open", side_effect=Exception("Test error"))
     @patch("core.logger.logger.error")
@@ -131,7 +132,7 @@ class TestSyncData:
 
         # Проверяем текст сообщения об ошибке
         args, kwargs = mock_logger.call_args
-        assert args[0] == "Failed parse meta file"
+        assert args[0] == "Failed to parse meta file"
 
         # Проверяем что был передан exc_info и это Exception
         assert "exc_info" in kwargs

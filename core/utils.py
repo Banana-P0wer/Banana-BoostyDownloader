@@ -11,7 +11,7 @@ from core.logger import logger
 
 def create_dir_if_not_exists(path: Path):
     if not os.path.isdir(path):
-        logger.info(f"create directory: {path}")
+        logger.info(f"Create directory: {path}")
         os.mkdir(path)
 
 
@@ -68,9 +68,7 @@ def print_summary(
     need_load_files: bool,
     storage_type: str,
 ):
-    print("Ok, working with", end=" ")
-    print_colorized("", creator_name, end=", ")
-    print("home directory:", end=" ")
+    print("Ok, home directory:", end=" ")
     print_colorized("", sync_dir, end=" ")
     print("sync type:", end=" ")
     print_colorized("", storage_type)
@@ -92,5 +90,5 @@ def parse_offset_time(offset: str) -> Optional[int]:
         parts = offset.split(":")
         return int(parts[0])
     except Exception as e:
-        logger.error(f"Failed parse offset {offset}", exc_info=e)
+        logger.error(f"Failed to parse offset {offset}", exc_info=e)
         return None

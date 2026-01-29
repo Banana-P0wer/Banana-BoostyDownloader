@@ -27,7 +27,7 @@ async def main():
     if conf.desired_post_id is None and post_id_from_link:
         conf.desired_post_id = post_id_from_link
     if parsed_creator_name.replace(" ", "") == "":
-        logger.critical("Empty creator name, exit")
+        logger.critical("Empty creator name, exiting.")
         raise ConfigMalformedExc
     use_cookie_in = True
     if not conf.ready_to_auth():
@@ -35,7 +35,7 @@ async def main():
         if parse_bool(input("Do you want to continue without authorization? (y/n) > ")):
             use_cookie_in = False
         else:
-            logger.info("ok")
+            logger.info("Ok.")
             raise SyncCancelledExc
     print_summary(
         creator_name=parsed_creator_name,
@@ -52,12 +52,17 @@ async def main():
             raise SyncCancelledExc
 
     if not os.path.isdir(conf.sync_dir):
-        logger.critical(f"path {conf.sync_dir} is not exists. create it and try again.")
+        logger.critical(f"Path {conf.sync_dir} does not exist. Create it and try again.")
         raise ConfigMalformedExc
 
     base_path: Path = conf.sync_dir / parsed_creator_name
     cache_path = base_path / "__cache__"
     sync_data_file_path = cache_path / conf.default_sd_file_name
+
+    print_colorized("starting sync", conf.storage_type)
+    if conf.desired_post_id:
+        print("syncing 1 post:")
+        print(f"{parsed_creator_name:<24} {conf.desired_post_id}")
 
     create_dir_if_not_exists(base_path)
     create_dir_if_not_exists(cache_path)
@@ -65,10 +70,6 @@ async def main():
     sync_data = None
     if conf.sync_offset_save:
         sync_data = await SyncData.get_or_create_sync_data(sync_data_file_path, parsed_creator_name)
-
-    print_colorized(f"starting sync", conf.storage_type)
-    if conf.desired_post_id:
-        print_colorized(f"syncing only one post", conf.desired_post_id)
         await fetch_and_save_lonely_post(
             creator_name=parsed_creator_name,
             post_id=conf.desired_post_id,

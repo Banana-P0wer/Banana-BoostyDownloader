@@ -1,11 +1,11 @@
 import asyncio
 import os
 from pathlib import Path
-from typing import Literal, Any, Optional, Awaitable
+from typing import Literal, Any, Optional
 
 from boosty.api import download_file
 from boosty.wrappers.media_pool import MediaPool
-from core.defs import ContentType
+from core.defs import ContentType, AsciiCommands
 from core.logger import logger
 from core.meta import write_video_metadata
 from core.utils import create_dir_if_not_exists
@@ -30,16 +30,18 @@ class Downloader:
             self,
             file_url: str,
             path: Path,
-            meta_writer: Optional[Awaitable] = None
+            metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         if os.path.isfile(path):
-            logger.debug(f"pass saving file {path}: already exists")
+            logger.debug(f"Skip saving file {path}: already exists")
             return False
-        logger.info(f"will save file: {path}")
+        logger.info(f"Will save file: {path}")
         result = await download_file(file_url, path)
-        if self._save_meta and result and meta_writer:
-            logger.info(f"writing metadata to file {path}")
-            await meta_writer
+        if self._save_meta and result and metadata:
+            logger.info(f"Write metadata to file {path}")
+            await write_video_metadata(path, metadata)
+        if result:
+            logger.info(f"{AsciiCommands.COLORIZE_HIGHLIGHT.value}Download complete{AsciiCommands.COLORIZE_DEFAULT.value}")
         return result
 
     async def _get_file_and_raise_stat(
@@ -49,39 +51,38 @@ class Downloader:
             _t: Literal["p", "v", "a", "f"],
             metadata: dict[str, Any] | None = None
     ):
+        meta = metadata
         match _t:
             case "p":
                 passed = stat_tracker.add_passed_photo
                 downloaded = stat_tracker.add_downloaded_photo
                 error = stat_tracker.add_error_photo
-                meta_writer = None
+                meta = None
             case "v":
                 passed = stat_tracker.add_passed_video
                 downloaded = stat_tracker.add_downloaded_video
                 error = stat_tracker.add_error_video
-                meta_writer = write_video_metadata(path_file, metadata)
             case "a":
                 passed = stat_tracker.add_passed_audio
                 downloaded = stat_tracker.add_downloaded_audio
                 error = stat_tracker.add_error_audio
-                meta_writer = None
+                meta = None
             case "f":
                 passed = stat_tracker.add_passed_file
                 downloaded = stat_tracker.add_downloaded_file
                 error = stat_tracker.add_error_file
-                meta_writer = None
+                meta = None
             case _:
                 logger.warning(f"Unknown _t: {_t}")
                 return
 
         async with self._semaphore:
             try:
-                if await self._download_file_if_not_exists(url, path_file, meta_writer):
+                if await self._download_file_if_not_exists(url, path_file, meta):
                     downloaded()
                 else:
                     passed()
             except Exception as e:
-                logger.warning(f"err download {url}", exc_info=e)
                 error()
 
     async def download_by_content_type(self, content_type: ContentType):

@@ -41,4 +41,4 @@ class TestApi:
         assert result is None
         assert mock_logger.call_count == 1
         args, kwargs = mock_logger.call_args
-        assert args[0] == "Failed get media album"
+        assert args[0] == "Failed to get media album"

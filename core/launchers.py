@@ -11,6 +11,7 @@ from boosty.wrappers.media_pool import MediaPool
 from core.defs import ContentType
 from core.downloader import Downloader
 from core.logger import logger
+from core.stat_tracker import stat_tracker
 from core.post_mapping.db import PostDBClient
 from core.post_mapping.utils import ensure_post_database_exists, validate_windows_dir_name
 from core.sync_data import SyncData
@@ -48,7 +49,7 @@ async def _fetch_media(
             fot = parsed_offset
         if eot and parsed_offset:
             if parsed_offset <= eot:
-                logger.debug(f"Stop scanning media due to next api offset"
+                logger.debug(f"Stop scanning media because next API offset"
                              f" <= last saved offset: {parsed_offset} <= {eot}")
                 is_last = True
         await asyncio.sleep(0.3)
@@ -126,8 +127,8 @@ async def fetch_and_save_media(
             )
         )
     if conf.need_load_files:
-        logger.warning("ATTACHED FILES WILL NOT BE DOWNLOADED IN MEDIA STORAGE MODE")
-        logger.warning("Use storage_type: post, for download attached files")
+        logger.warning("Attached files will not be downloaded in media storage mode.")
+        logger.warning("Use storage_type: post to download attached files.")
     await asyncio.gather(*tasks_pull)
 
     if sync_data:
@@ -150,7 +151,7 @@ async def fetch_and_save_posts(
     if conf.enable_post_masquerade:
         post_db_path = cache_path / "post.db"
         if not ensure_post_database_exists(post_db_path):
-            logger.critical("Can't create post db. "
+            logger.critical("Cannot create post db. "
                             "If this is not the first time you have encountered this problem, "
                             "disable this param in config: 'enable_post_masquerade'.")
             return
@@ -171,7 +172,7 @@ async def fetch_and_save_posts(
             fot = parsed_offset
         if eot and parsed_offset:
             if parsed_offset <= eot:
-                logger.debug(f"Stop scanning posts due to next api offset"
+                logger.debug(f"Stop scanning posts because next API offset"
                              f" <= last saved offset: {parsed_offset} <= {eot}")
                 post_pool.close()
         await asyncio.sleep(0.5)
@@ -220,14 +221,14 @@ async def fetch_and_save_posts(
                 if use_cookie:
                     tasks.append(downloader.download_audios())
                 else:
-                    logger.warning("Can't download audio without authorization. "
+                    logger.warning("Cannot download audio without authorization. "
                                    "Fill authorization fields in config to store audio files.")
 
             if conf.need_load_files:
                 if use_cookie:
                     tasks.append(downloader.download_files())
                 else:
-                    logger.warning("Can't download attached files without authorization. "
+                    logger.warning("Cannot download attached files without authorization. "
                                    "Fill authorization fields in config to store attached files.")
 
             await asyncio.gather(*tasks)
@@ -267,17 +268,30 @@ async def fetch_and_save_lonely_post(
     if conf.enable_post_masquerade:
         post_db_path = cache_path / "post.db"
         if not ensure_post_database_exists(post_db_path):
-            logger.critical("Can't create post db. "
+            logger.critical("Cannot create post db. "
                             "If this is not the first time you have encountered this problem, "
                             "disable this param in config: 'enable_post_masquerade'.")
             return
         post_db_client = PostDBClient(post_db_path)
 
     post_pool = PostPool()
-    await get_post_by_id(creator_name=creator_name, post_id=post_id, post_pool=post_pool, use_cookie=use_cookie)
+    fetch_status = await get_post_by_id(
+        creator_name=creator_name,
+        post_id=post_id,
+        post_pool=post_pool,
+        use_cookie=use_cookie
+    )
+
+    if fetch_status != "ok" or not post_pool.get_posts():
+        if fetch_status == "not_found":
+            logger.error(f"Post not found: {post_id}")
+        else:
+            logger.error(f"Failed to load post {post_id}. Check access rights or authorization.")
+        return
 
     for post in post_pool.get_posts():
         tasks = []
+        counters_before = stat_tracker.get_counters()
         post_path = posts_path / post.id
         if conf.enable_post_masquerade:
             existing_post_data = post_db_client.get_post(post.id)
@@ -320,17 +334,26 @@ async def fetch_and_save_lonely_post(
             if use_cookie:
                 tasks.append(downloader.download_audios())
             else:
-                logger.warning("Can't download audio without authorization. "
+                logger.warning("Cannot download audio without authorization. "
                                "Fill authorization fields in config to store audio files.")
 
-        if conf.need_load_files:
-            if use_cookie:
-                tasks.append(downloader.download_files())
-            else:
-                logger.warning("Can't download attached files without authorization. "
-                               "Fill authorization fields in config to store attached files.")
+            if conf.need_load_files:
+                if use_cookie:
+                    tasks.append(downloader.download_files())
+                else:
+                    logger.warning("Cannot download attached files without authorization. "
+                                   "Fill authorization fields in config to store attached files.")
 
         await asyncio.gather(*tasks)
+        counters_after = stat_tracker.get_counters()
+        downloaded_delta = counters_after["downloaded"] - counters_before["downloaded"]
+        errors_delta = counters_after["errors"] - counters_before["errors"]
+        passed_delta = counters_after["passed"] - counters_before["passed"]
+        if downloaded_delta == 0 and errors_delta == 0:
+            if passed_delta > 0:
+                logger.error("Nothing new to download; files already exist.")
+            else:
+                logger.error("No downloadable content for this post.")
 
     if post_db_client:
         post_db_client.close()
