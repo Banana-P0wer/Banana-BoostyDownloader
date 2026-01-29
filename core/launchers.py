@@ -11,11 +11,19 @@ from boosty.wrappers.media_pool import MediaPool
 from core.defs import ContentType, AsciiCommands
 from core.downloader import Downloader
 from core.logger import logger
-from core.stat_tracker import stat_tracker
 from core.post_mapping.db import PostDBClient
 from core.post_mapping.utils import ensure_post_database_exists, validate_windows_dir_name
 from core.sync_data import SyncData
 from core.utils import create_dir_if_not_exists, create_text_document, parse_offset_time
+
+_post_db_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_post_db_lock(db_path: Path) -> asyncio.Lock:
+    key = str(db_path.resolve())
+    if key not in _post_db_locks:
+        _post_db_locks[key] = asyncio.Lock()
+    return _post_db_locks[key]
 
 
 async def _fetch_media(
@@ -265,13 +273,16 @@ async def fetch_and_save_lonely_post(
     create_dir_if_not_exists(posts_path)
 
     post_db_client = None
+    post_db_lock = None
     if conf.enable_post_masquerade:
         post_db_path = cache_path / "post.db"
-        if not ensure_post_database_exists(post_db_path):
-            logger.critical("Cannot create post db. "
-                            "If this is not the first time you have encountered this problem, "
-                            "disable this param in config: 'enable_post_masquerade'.")
-            return "error"
+        post_db_lock = _get_post_db_lock(post_db_path)
+        async with post_db_lock:
+            if not ensure_post_database_exists(post_db_path):
+                logger.critical("Cannot create post db. "
+                                "If this is not the first time you have encountered this problem, "
+                                "disable this param in config: 'enable_post_masquerade'.")
+                return "error", []
         post_db_client = PostDBClient(post_db_path)
 
     post_pool = PostPool()
@@ -287,29 +298,29 @@ async def fetch_and_save_lonely_post(
             logger.error(f"Post not found: {post_id}")
         else:
             logger.error(f"Failed to load post {post_id}. Check access rights or authorization.")
-        return fetch_status or "error"
+        return fetch_status or "error", []
 
     any_downloaded = False
     any_errors = False
     any_skipped = False
+    incomplete_files: list[str] = []
     for post in post_pool.get_posts():
         tasks = []
-        counters_before = stat_tracker.get_counters()
-        incomplete_before = stat_tracker.get_incomplete_count()
         post_path = posts_path / post.id
         if conf.enable_post_masquerade:
-            existing_post_data = post_db_client.get_post(post.id)
-            if existing_post_data:
-                post_path = Path(existing_post_data["post_path"])
-            else:
-                if len(post.title):
-                    human_filename = validate_windows_dir_name(post.title)
+            async with post_db_lock:
+                existing_post_data = post_db_client.get_post(post.id)
+                if existing_post_data:
+                    post_path = Path(existing_post_data["post_path"])
                 else:
-                    human_filename = post.id
-                post_path = posts_path / human_filename
-                if len(post_db_client.get_posts_by_path(str(post_path))):
-                    post_path = posts_path / (human_filename + "_" + post.id)
-                post_db_client.create_post(creator_name, str(post_path), post.id)
+                    if len(post.title):
+                        human_filename = validate_windows_dir_name(post.title)
+                    else:
+                        human_filename = post.id
+                    post_path = posts_path / human_filename
+                    if len(post_db_client.get_posts_by_path(str(post_path))):
+                        post_path = posts_path / (human_filename + "_" + post.id)
+                    post_db_client.create_post(creator_name, str(post_path), post.id)
 
         create_dir_if_not_exists(post_path)
 
@@ -348,25 +359,35 @@ async def fetch_and_save_lonely_post(
                 logger.warning("Cannot download attached files without authorization. "
                                "Fill authorization fields in config to store attached files.")
 
-        await asyncio.gather(*tasks)
-        counters_after = stat_tracker.get_counters()
-        downloaded_delta = counters_after["downloaded"] - counters_before["downloaded"]
-        errors_delta = counters_after["errors"] - counters_before["errors"]
-        passed_delta = counters_after["passed"] - counters_before["passed"]
-        incomplete_delta = stat_tracker.get_incomplete_count() - incomplete_before
-        if errors_delta > 0:
+        results = await asyncio.gather(*tasks) if tasks else []
+        post_statuses: list[str] = []
+        post_incomplete: list[str] = []
+        for item_results, item_incomplete in results:
+            if item_results:
+                post_statuses.extend(item_results)
+            if item_incomplete:
+                post_incomplete.extend(item_incomplete)
+
+        has_downloaded = "downloaded" in post_statuses
+        has_error = "error" in post_statuses
+        has_passed = "passed" in post_statuses
+        has_incomplete = "incomplete" in post_statuses or bool(post_incomplete)
+
+        if has_error:
             any_errors = True
-        if downloaded_delta == 0 and errors_delta == 0:
-            if passed_delta > 0:
+        if not has_downloaded and not has_error:
+            if has_passed or has_incomplete:
                 logger.error("Nothing new to download; files already exist.")
             else:
                 logger.error("No downloadable content for this post.")
             any_skipped = True
-        elif downloaded_delta > 0 and errors_delta == 0:
+        elif has_downloaded and not has_error:
             logger.info(f"{AsciiCommands.COLORIZE_HIGHLIGHT.value}Download complete{AsciiCommands.COLORIZE_DEFAULT.value}")
             any_downloaded = True
-        if incomplete_delta > 0:
+
+        if has_incomplete:
             any_skipped = True
+            incomplete_files.extend(post_incomplete)
 
     if post_db_client:
         post_db_client.close()
@@ -375,9 +396,9 @@ async def fetch_and_save_lonely_post(
         await sync_data.set_last_sync_utc(datetime.now(UTC))
         await sync_data.save()
     if any_errors:
-        return "error"
+        return "error", incomplete_files
     if any_downloaded:
-        return "downloaded"
+        return "downloaded", incomplete_files
     if any_skipped:
-        return "skipped"
-    return "ok"
+        return "skipped", incomplete_files
+    return "ok", incomplete_files

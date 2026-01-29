@@ -31,7 +31,7 @@ class Downloader:
             file_url: str,
             path: Path,
             metadata: Optional[dict[str, Any]] = None
-    ) -> bool:
+    ) -> Literal["downloaded", "passed", "incomplete"]:
         part_path = Path(str(path) + ".part")
         if part_path.exists():
             logger.info(f"Found incomplete file part, deleting: {part_path}")
@@ -49,11 +49,15 @@ class Downloader:
                 if actual_len < expected_len * 0.8:
                     logger.warning("File already exists but appears to be incomplete or corrupted")
                     stat_tracker.add_incomplete_file(str(path))
+                    logger.debug(f"Skip saving file {path}: already exists but appears incomplete")
+                    return "incomplete"
             logger.debug(f"Skip saving file {path}: already exists")
-            return False
+            return "passed"
 
         logger.info(f"Will save file: {path}")
         result = await download_file(file_url, part_path)
+        if not result:
+            raise Exception(f"Failed to download file {file_url}")
         if result:
             try:
                 os.replace(part_path, path)
@@ -63,7 +67,7 @@ class Downloader:
         if self._save_meta and result and metadata:
             logger.info(f"Write metadata to file {path}")
             await write_video_metadata(path, metadata)
-        return result
+        return "downloaded"
 
     async def _get_file_and_raise_stat(
             self,
@@ -99,12 +103,15 @@ class Downloader:
 
         async with self._semaphore:
             try:
-                if await self._download_file_if_not_exists(url, path_file, meta):
+                status = await self._download_file_if_not_exists(url, path_file, meta)
+                if status == "downloaded":
                     downloaded()
                 else:
                     passed()
+                return status
             except Exception as e:
                 error()
+                return "error"
 
     async def download_by_content_type(self, content_type: ContentType):
         match content_type:
@@ -120,40 +127,56 @@ class Downloader:
 
     async def download_photos(self):
         tasks = []
+        paths = []
         photo_path = self.base_path / "photos"
         create_dir_if_not_exists(photo_path)
         images = self.media_pool.get_images()
         for image in images:
             path = photo_path / (image["id"] + ".jpg")
             tasks.append(self._get_file_and_raise_stat(image["url"], path, "p"))
-        await asyncio.gather(*tasks)
+            paths.append(path)
+        results = await asyncio.gather(*tasks)
+        incomplete_paths = [str(p) for p, r in zip(paths, results) if r == "incomplete"]
+        return results, incomplete_paths
 
     async def download_videos(self):
         tasks = []
+        paths = []
         video_path = self.base_path / "videos"
         create_dir_if_not_exists(video_path)
         videos = self.media_pool.get_videos()
         for video in videos:
             path = video_path / (video["id"] + ".mp4")
             tasks.append(self._get_file_and_raise_stat(video["url"], path, "v", video.get("meta")))
-        await asyncio.gather(*tasks)
+            paths.append(path)
+        results = await asyncio.gather(*tasks)
+        incomplete_paths = [str(p) for p, r in zip(paths, results) if r == "incomplete"]
+        return results, incomplete_paths
 
     async def download_audios(self):
         tasks = []
+        paths = []
         audio_path = self.base_path / "audios"
         create_dir_if_not_exists(audio_path)
         audios = self.media_pool.get_audios()
         for audio in audios:
             path = audio_path / (audio["id"] + ".mp3")
             tasks.append(self._get_file_and_raise_stat(audio["url"], path, "a"))
-        await asyncio.gather(*tasks)
+            paths.append(path)
+        results = await asyncio.gather(*tasks)
+        incomplete_paths = [str(p) for p, r in zip(paths, results) if r == "incomplete"]
+        return results, incomplete_paths
 
     async def download_files(self):
         tasks = []
+        paths = []
         files_path = self.base_path / "files"
         create_dir_if_not_exists(files_path)
         files = self.media_pool.get_files()
         for file in files:
             path = files_path / file["title"]
             tasks.append(self._get_file_and_raise_stat(file["url"], path, "f"))
-        await asyncio.gather(*tasks)
+            paths.append(path)
+        results = await asyncio.gather(*tasks)
+        incomplete_paths = [str(p) for p, r in zip(paths, results) if r == "incomplete"]
+        return results, incomplete_paths

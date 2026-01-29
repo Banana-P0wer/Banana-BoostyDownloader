@@ -97,35 +97,62 @@ async def main():
         skipped_links = []
         failed_links = []
         incomplete_links = []
-        for creator_name, post_id, raw_link in links_queue:
-            base_path: Path = conf.sync_dir / creator_name
-            cache_path = base_path / "__cache__"
-            sync_data_file_path = cache_path / conf.default_sd_file_name
+        incomplete_files_all = []
 
-            create_dir_if_not_exists(base_path)
-            create_dir_if_not_exists(cache_path)
-
-            sync_data = None
-            if conf.sync_offset_save:
+        sync_data_by_creator = {}
+        sync_data_errors = set()
+        if conf.sync_offset_save:
+            unique_creators = {creator for creator, _, _ in links_queue}
+            for creator_name in unique_creators:
+                base_path = conf.sync_dir / creator_name
+                cache_path = base_path / "__cache__"
+                sync_data_file_path = cache_path / conf.default_sd_file_name
+                create_dir_if_not_exists(base_path)
+                create_dir_if_not_exists(cache_path)
                 try:
-                    sync_data = await SyncData.get_or_create_sync_data(sync_data_file_path, creator_name)
+                    sync_data_by_creator[creator_name] = await SyncData.get_or_create_sync_data(
+                        sync_data_file_path,
+                        creator_name
+                    )
                 except Exception as e:
                     logger.error(f"Failed to prepare sync data for {creator_name}: {e}")
-                    failed_links.append(raw_link)
-                    continue
+                    sync_data_errors.add(creator_name)
 
-            incomplete_before = stat_tracker.get_incomplete_count()
-            status = await fetch_and_save_lonely_post(
-                creator_name=creator_name,
-                post_id=post_id,
-                use_cookie=use_cookie_in,
-                base_path=base_path,
-                cache_path=cache_path,
-                sync_data=sync_data
-            )
-            if stat_tracker.get_incomplete_count() > incomplete_before:
+        post_parallel = max(1, int(conf.max_download_parallel))
+        post_semaphore = asyncio.Semaphore(post_parallel)
+
+        async def process_link(creator_name: str, post_id: str, raw_link: str):
+            async with post_semaphore:
+                if creator_name in sync_data_errors:
+                    return raw_link, "error", []
+                base_path = conf.sync_dir / creator_name
+                cache_path = base_path / "__cache__"
+                create_dir_if_not_exists(base_path)
+                create_dir_if_not_exists(cache_path)
+                sync_data = sync_data_by_creator.get(creator_name) if conf.sync_offset_save else None
+                try:
+                    status, incomplete_files = await fetch_and_save_lonely_post(
+                        creator_name=creator_name,
+                        post_id=post_id,
+                        use_cookie=use_cookie_in,
+                        base_path=base_path,
+                        cache_path=cache_path,
+                        sync_data=sync_data
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to process link {raw_link}: {e}")
+                    return raw_link, "error", []
+                return raw_link, status, incomplete_files
+
+        tasks = [process_link(creator_name, post_id, raw_link) for creator_name, post_id, raw_link in links_queue]
+        results = await asyncio.gather(*tasks)
+        for raw_link, status, incomplete_files in results:
+            if incomplete_files:
                 if raw_link not in incomplete_links:
                     incomplete_links.append(raw_link)
+                for file_path in incomplete_files:
+                    if file_path not in incomplete_files_all:
+                        incomplete_files_all.append(file_path)
             if status == "downloaded":
                 succeeded_links.append(raw_link)
             elif status == "skipped":
@@ -146,15 +173,14 @@ async def main():
                 f"{AsciiCommands.COLORIZE_WARNING.value}Skipped (already downloaded) links:"
                 f"{AsciiCommands.COLORIZE_DEFAULT.value}\n" + "\n".join(skipped_links)
             )
-            incomplete_files = stat_tracker.get_incomplete_files()
-            if incomplete_files:
+            if incomplete_files_all:
                 logger.warning(
                     "The following files appear to be incomplete or corrupted:\n"
-                    + "\n".join(incomplete_files)
+                    + "\n".join(incomplete_files_all)
                 )
                 print("Would you like to delete these files and try downloading them again to avoid potential issues?")
                 if parse_bool(input("Delete and re-download these files? (yes/no): ")):
-                    for file_path in incomplete_files:
+                    for file_path in incomplete_files_all:
                         try:
                             Path(file_path).unlink()
                         except Exception as e:
