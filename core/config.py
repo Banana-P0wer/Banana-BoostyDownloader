@@ -33,6 +33,7 @@ class Config:
     desired_post_id: Optional[str]
     creator_name: Optional[str]
     post_link: Optional[str]
+    links_file: Optional[str]
     auto_confirm_download: bool
 
     save_logs_to_file: bool
@@ -66,16 +67,23 @@ class Config:
             '--link',
             help="Specify the full boosty link to auto-detect author and post id."
         )
+        self.__arg_parser.add_argument(
+            '-f',
+            '--file',
+            help="Specify a file path with boosty post links (one per line)."
+        )
         self.__load()
 
     def __load(self):
         cfg_path = "./config.yml"
+        self.links_file = None
         if os.getenv("TESTING") != "1":
             args = self.__arg_parser.parse_args()
             cfg_path = args.config or cfg_path
             self.desired_post_id = args.post_id
             self.creator_name = args.author
             self.post_link = args.link
+            self.links_file = args.file
 
         self.__cfg_path = Path(cfg_path)
         try:

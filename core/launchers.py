@@ -8,7 +8,7 @@ from boosty.api import get_all_media_by_type, get_all_posts, get_post_by_id
 from boosty.wrappers.post_pool import PostPool
 from core.config import conf
 from boosty.wrappers.media_pool import MediaPool
-from core.defs import ContentType
+from core.defs import ContentType, AsciiCommands
 from core.downloader import Downloader
 from core.logger import logger
 from core.stat_tracker import stat_tracker
@@ -271,7 +271,7 @@ async def fetch_and_save_lonely_post(
             logger.critical("Cannot create post db. "
                             "If this is not the first time you have encountered this problem, "
                             "disable this param in config: 'enable_post_masquerade'.")
-            return
+            return "error"
         post_db_client = PostDBClient(post_db_path)
 
     post_pool = PostPool()
@@ -287,8 +287,11 @@ async def fetch_and_save_lonely_post(
             logger.error(f"Post not found: {post_id}")
         else:
             logger.error(f"Failed to load post {post_id}. Check access rights or authorization.")
-        return
+        return fetch_status or "error"
 
+    any_downloaded = False
+    any_errors = False
+    any_skipped = False
     for post in post_pool.get_posts():
         tasks = []
         counters_before = stat_tracker.get_counters()
@@ -337,23 +340,29 @@ async def fetch_and_save_lonely_post(
                 logger.warning("Cannot download audio without authorization. "
                                "Fill authorization fields in config to store audio files.")
 
-            if conf.need_load_files:
-                if use_cookie:
-                    tasks.append(downloader.download_files())
-                else:
-                    logger.warning("Cannot download attached files without authorization. "
-                                   "Fill authorization fields in config to store attached files.")
+        if conf.need_load_files:
+            if use_cookie:
+                tasks.append(downloader.download_files())
+            else:
+                logger.warning("Cannot download attached files without authorization. "
+                               "Fill authorization fields in config to store attached files.")
 
         await asyncio.gather(*tasks)
         counters_after = stat_tracker.get_counters()
         downloaded_delta = counters_after["downloaded"] - counters_before["downloaded"]
         errors_delta = counters_after["errors"] - counters_before["errors"]
         passed_delta = counters_after["passed"] - counters_before["passed"]
+        if errors_delta > 0:
+            any_errors = True
         if downloaded_delta == 0 and errors_delta == 0:
             if passed_delta > 0:
                 logger.error("Nothing new to download; files already exist.")
             else:
                 logger.error("No downloadable content for this post.")
+            any_skipped = True
+        elif downloaded_delta > 0 and errors_delta == 0:
+            logger.info(f"{AsciiCommands.COLORIZE_HIGHLIGHT.value}Download complete{AsciiCommands.COLORIZE_DEFAULT.value}")
+            any_downloaded = True
 
     if post_db_client:
         post_db_client.close()
@@ -361,3 +370,10 @@ async def fetch_and_save_lonely_post(
     if sync_data:
         await sync_data.set_last_sync_utc(datetime.now(UTC))
         await sync_data.save()
+    if any_errors:
+        return "error"
+    if any_downloaded:
+        return "downloaded"
+    if any_skipped:
+        return "skipped"
+    return "ok"

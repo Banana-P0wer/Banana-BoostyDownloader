@@ -5,7 +5,7 @@ from typing import Literal, Any, Optional
 
 from boosty.api import download_file
 from boosty.wrappers.media_pool import MediaPool
-from core.defs import ContentType, AsciiCommands
+from core.defs import ContentType
 from core.logger import logger
 from core.meta import write_video_metadata
 from core.utils import create_dir_if_not_exists
@@ -40,8 +40,6 @@ class Downloader:
         if self._save_meta and result and metadata:
             logger.info(f"Write metadata to file {path}")
             await write_video_metadata(path, metadata)
-        if result:
-            logger.info(f"{AsciiCommands.COLORIZE_HIGHLIGHT.value}Download complete{AsciiCommands.COLORIZE_DEFAULT.value}")
         return result
 
     async def _get_file_and_raise_stat(
