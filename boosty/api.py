@@ -1,11 +1,16 @@
 import asyncio
 import time
+import threading
 from pathlib import Path
 from typing import Optional, Any
 
 import aiofiles
 from aiohttp import ClientSession
 from copy import copy
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
 
 from boosty.defs import MediaType
 from boosty.wrappers.post import Post
@@ -17,6 +22,35 @@ from core.defs import VIDEO_QUALITY, ContentType
 from core.logger import logger
 from core.meta import parse_metadata
 from core.stat_tracker import stat_tracker
+
+
+_progress_lock = threading.Lock()
+_progress_positions: list[int] = []
+_next_progress_position = 0
+
+
+def _acquire_progress_position() -> int:
+    global _next_progress_position
+    with _progress_lock:
+        if _progress_positions:
+            return _progress_positions.pop(0)
+        pos = _next_progress_position
+        _next_progress_position += 1
+        return pos
+
+
+def _release_progress_position(position: int) -> None:
+    with _progress_lock:
+        _progress_positions.append(position)
+
+
+def _format_progress_label(path: Path, max_len: int = 80) -> str:
+    name = path.name
+    if name.endswith(".part"):
+        name = name[:-5]
+    if len(name) > max_len:
+        name = "..." + name[-(max_len - 3):]
+    return f"{name}:"
 
 
 async def get_media_list(
@@ -125,6 +159,7 @@ async def download_file(url: str, path: Path) -> bool:
         raise Exception("Empty url")
     try:
         async with ClientSession() as session:
+            label = _format_progress_label(path)
             headers = copy(DEFAULT_HEADERS)
             headers.update(DOWNLOAD_HEADERS)
             for i in range(3):
@@ -139,6 +174,8 @@ async def download_file(url: str, path: Path) -> bool:
                 if response.status == 200:
                     length = response.content_length
                     async with aiofiles.open(path, "wb") as file:
+                        bar = None
+                        bar_pos = None
                         try:
                             logger.info(f"Saving file {path}")
                             if length is not None:
@@ -147,9 +184,27 @@ async def download_file(url: str, path: Path) -> bool:
                             downloaded_bytes = 0
                             last_log = time.monotonic()
                             start_time = last_log
-                            logger.info(f"Downloading file... chunk size={chunk_size}")
+                            if conf.progress_bar and tqdm is not None:
+                                bar_pos = _acquire_progress_position()
+                                bar = tqdm(
+                                    total=length,
+                                    desc=label,
+                                    position=bar_pos,
+                                    leave=True,
+                                    dynamic_ncols=True,
+                                    unit="B",
+                                    unit_scale=True,
+                                    unit_divisor=1024,
+                                    bar_format="{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}"
+                                )
+                            else:
+                                logger.info(f"[{label}] Downloading... chunk size={chunk_size}")
                             async for content in response.content.iter_chunked(chunk_size):
-                                if time.monotonic() - last_log > 30.0:
+                                await file.write(content)  # noqa
+                                downloaded_bytes += len(content)  # noqa
+                                if bar:
+                                    bar.update(len(content))
+                                elif time.monotonic() - last_log > 30.0:
                                     downloaded = downloaded_bytes if downloaded_bytes > 0 else 1
                                     if length:
                                         download_percent = int(downloaded / length * 100)
@@ -161,17 +216,19 @@ async def download_file(url: str, path: Path) -> bool:
                                     if length:
                                         total_time = round(elapsed * (length / downloaded), 2)
                                         estimated = total_time - elapsed
-                                        logger.info(f"Still downloading file... {progress} "
+                                        logger.info(f"[{label}] Still downloading... {progress} "
                                                     f"(ela: {int(elapsed) // 60} min; eta: {int(estimated) // 60} min.)")
                                     else:
-                                        logger.info(f"Still downloading file... {progress} "
+                                        logger.info(f"[{label}] Still downloading... {progress} "
                                                     f"(ela: {int(elapsed) // 60} min)")
-                                await file.write(content)  # noqa
-                                downloaded_bytes += len(content)  # noqa
                         except Exception as e:
                             logger.warning(f"Failed to write file {path}: {e}, trying again")
                             await asyncio.sleep(0.5)
                             continue
+                        finally:
+                            if bar:
+                                bar.close()
+                                _release_progress_position(bar_pos)
                     if length is not None:
                         diff_ratio = abs(downloaded_bytes - length) / length if length else 0
                         if diff_ratio > 0.05:

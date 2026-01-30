@@ -4,6 +4,13 @@ from datetime import datetime
 from core.config import conf
 from core.defs import AsciiCommands
 
+try:
+    from tqdm import tqdm
+    _TQDM_AVAILABLE = True
+except Exception:
+    tqdm = None
+    _TQDM_AVAILABLE = False
+
 
 class ColorizingFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -28,7 +35,14 @@ class ColorizingFormatter(logging.Formatter):
 logger = logging.getLogger("boosty_downloader")
 logger.setLevel(logging.DEBUG if conf.debug else logging.INFO)
 
-stream_handler = logging.StreamHandler()
+if conf.progress_bar and _TQDM_AVAILABLE:
+    class TqdmHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            msg = self.format(record)
+            tqdm.write(msg)
+    stream_handler = TqdmHandler()
+else:
+    stream_handler = logging.StreamHandler()
 plain_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 color_formatter = ColorizingFormatter("%(asctime)s [%(levelname)s] %(message)s")
 
