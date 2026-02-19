@@ -1,11 +1,16 @@
 import asyncio
 import time
+import threading
 from pathlib import Path
 from typing import Optional, Any
 
 import aiofiles
 from aiohttp import ClientSession
 from copy import copy
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
 
 from boosty.defs import MediaType
 from boosty.wrappers.post import Post
@@ -17,6 +22,35 @@ from core.defs import VIDEO_QUALITY, ContentType
 from core.logger import logger
 from core.meta import parse_metadata
 from core.stat_tracker import stat_tracker
+
+
+_progress_lock = threading.Lock()
+_progress_positions: list[int] = []
+_next_progress_position = 0
+
+
+def _acquire_progress_position() -> int:
+    global _next_progress_position
+    with _progress_lock:
+        if _progress_positions:
+            return _progress_positions.pop(0)
+        pos = _next_progress_position
+        _next_progress_position += 1
+        return pos
+
+
+def _release_progress_position(position: int) -> None:
+    with _progress_lock:
+        _progress_positions.append(position)
+
+
+def _format_progress_label(path: Path, max_len: int = 80) -> str:
+    name = path.name
+    if name.endswith(".part"):
+        name = name[:-5]
+    if len(name) > max_len:
+        name = "..." + name[-(max_len - 3):]
+    return f"{name}:"
 
 
 async def get_media_list(
@@ -45,7 +79,7 @@ async def get_media_list(
             send_headers["Cookie"] = conf.cookie
             send_headers["Authorization"] = conf.authorization
         url = BOOSTY_API_BASE_URL + f"/v1/blog/{creator_name}/media_album/"
-        logger.info("GET " + url + f" offset={offset} media_type={media_type}")
+        logger.info("Get " + url + f" offset={offset} media_type={media_type}")
         resp = await session.get(
             url,
             params=params,
@@ -53,7 +87,7 @@ async def get_media_list(
         )
         result = await resp.json()
     except Exception as e:
-        logger.error("Failed get media album", exc_info=e)
+        logger.error("Failed to get media album", exc_info=e)
         result = None
     return result
 
@@ -65,7 +99,7 @@ async def get_all_media_by_type(
     use_cookie: bool,
     offset: Optional[str] = None
 ) -> tuple[Any, Any]:
-    logger.info(f"get all {content_type.value} for {creator_name}")
+    logger.info(f"Get all {content_type.value} for {creator_name}")
     async with ClientSession() as session:
         for i in range(10):
             resp = await get_media_list(
@@ -76,7 +110,7 @@ async def get_all_media_by_type(
                 offset=offset
             )
             if not resp:
-                logger.warning(f"get all {content_type.value} for {creator_name} failed due unknown reason, rerun...")
+                logger.warning(f"Get all {content_type.value} for {creator_name} failed due to unknown reason, retrying...")
                 await asyncio.sleep(0.3)
                 continue
             extra = resp["extra"]
@@ -121,14 +155,15 @@ async def get_all_media_by_type(
 
 async def download_file(url: str, path: Path) -> bool:
     if url == "":
-        logger.warning(f"Empty URL for {path} file, skip")
+        logger.warning(f"Empty URL for {path} file; skip")
         raise Exception("Empty url")
     try:
         async with ClientSession() as session:
+            label = _format_progress_label(path)
             headers = copy(DEFAULT_HEADERS)
             headers.update(DOWNLOAD_HEADERS)
             for i in range(3):
-                logger.info(f"preparing download {url}")
+                logger.info(f"Preparing download {url}")
                 response = await session.get(
                     url,
                     headers=headers,
@@ -139,48 +174,111 @@ async def download_file(url: str, path: Path) -> bool:
                 if response.status == 200:
                     length = response.content_length
                     async with aiofiles.open(path, "wb") as file:
+                        bar = None
+                        bar_pos = None
                         try:
-                            logger.info(f"saving file {path}")
-                            logger.info(f"file size: {round(length / 1024 / 1024, 2)} (Mb)")
+                            logger.info(f"Saving file {path}")
+                            if length is not None:
+                                logger.info(f"File size: {round(length / 1024 / 1024, 2)} (MB)")
                             chunk_size = conf.download_chunk_size
                             downloaded_bytes = 0
                             last_log = time.monotonic()
                             start_time = last_log
-                            logger.info(f"downloading file... chunk size={chunk_size}")
+                            if conf.progress_bar and tqdm is not None:
+                                bar_pos = _acquire_progress_position()
+                                bar = tqdm(
+                                    total=length,
+                                    desc=label,
+                                    position=bar_pos,
+                                    leave=True,
+                                    dynamic_ncols=True,
+                                    unit="B",
+                                    unit_scale=True,
+                                    unit_divisor=1024,
+                                    bar_format="{desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}"
+                                )
+                            else:
+                                logger.info(f"[{label}] Downloading... chunk size={chunk_size}")
                             async for content in response.content.iter_chunked(chunk_size):
-                                if time.monotonic() - last_log > 30.0:
-                                    downloaded = downloaded_bytes if downloaded_bytes > 0 else 1
-                                    download_percent = int(downloaded / length * 100)
-                                    last_log = time.monotonic()
-                                    elapsed = last_log - start_time
-                                    total_time = round(elapsed * (length / downloaded), 2)
-                                    estimated = total_time - elapsed
-                                    logger.info(f"still downloading file... {download_percent}% "
-                                                f"(ela: {int(elapsed) // 60} min; eta: {int(estimated) // 60} min.)")
                                 await file.write(content)  # noqa
                                 downloaded_bytes += len(content)  # noqa
+                                if bar:
+                                    bar.update(len(content))
+                                elif time.monotonic() - last_log > 30.0:
+                                    downloaded = downloaded_bytes if downloaded_bytes > 0 else 1
+                                    if length:
+                                        download_percent = int(downloaded / length * 100)
+                                        progress = f"{download_percent}%"
+                                    else:
+                                        progress = f"{downloaded // (1024 * 1024)} MB"
+                                    last_log = time.monotonic()
+                                    elapsed = last_log - start_time
+                                    if length:
+                                        total_time = round(elapsed * (length / downloaded), 2)
+                                        estimated = total_time - elapsed
+                                        logger.info(f"[{label}] Still downloading... {progress} "
+                                                    f"(ela: {int(elapsed) // 60} min; eta: {int(estimated) // 60} min.)")
+                                    else:
+                                        logger.info(f"[{label}] Still downloading... {progress} "
+                                                    f"(ela: {int(elapsed) // 60} min)")
                         except Exception as e:
-                            logger.warning(f"failed to write file {path}: {e}, trying again")
+                            logger.warning(f"Failed to write file {path}: {e}, trying again")
+                            await asyncio.sleep(0.5)
+                            continue
+                        finally:
+                            if bar:
+                                bar.close()
+                                _release_progress_position(bar_pos)
+                    if length is not None:
+                        diff_ratio = abs(downloaded_bytes - length) / length if length else 0
+                        if diff_ratio > 0.05:
+                            logger.warning(
+                                f"Downloaded size mismatch for {path}: "
+                                f"expected {length}, got {downloaded_bytes} "
+                                f"({round(diff_ratio * 100, 1)}%)"
+                            )
+                            try:
+                                path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
                             await asyncio.sleep(0.5)
                             continue
                     return True
                 else:
-                    lg = f"non-200 status code ({response.status} for file {url}, try again"
+                    lg = f"Non-200 status code ({response.status} for file {url}), retrying"
                     logger.warning(lg)
                     await asyncio.sleep(0.5)
-            logger.error(f"actually failed download file {url}")
-            raise Exception(f"actually failed download file {url}")
+            raise Exception(f"Failed to download file {url}")
 
     except TimeoutError:
-        lg = "[TimedOut] Failed download media due to timeout. " \
+        lg = "[TimedOut] Failed to download media due to timeout. " \
              "If file is large, try to set a higher value for the download_timeout parameter in config"
         logger.error(lg)
         stat_tracker.add_download_error(url)
         raise Exception(lg)
     except Exception as e:
-        logger.error(f"[{e.__class__.__name__}] Failed download media: {e}")
+        logger.error(f"{e}")
         stat_tracker.add_download_error(url)
         raise e
+
+
+async def get_content_length(url: str) -> Optional[int]:
+    headers = copy(DEFAULT_HEADERS)
+    try:
+        async with ClientSession() as session:
+            async with session.head(url, headers=headers, allow_redirects=True) as resp:
+                if resp.status in (200, 206):
+                    length = resp.headers.get("Content-Length")
+                    return int(length) if length else None
+
+            headers["Range"] = "bytes=0-0"
+            async with session.get(url, headers=headers, allow_redirects=True) as resp:
+                if resp.status in (200, 206):
+                    length = resp.headers.get("Content-Length")
+                    return int(length) if length else None
+    except Exception:
+        return None
+    return None
 
 
 async def get_profile_stat(creator_name: str):
@@ -197,7 +295,7 @@ async def get_profile_stat(creator_name: str):
             stat_tracker.total_videos = data["data"]["mediaCounters"]["okVideo"]
             stat_tracker.total_audios = data["data"]["mediaCounters"]["audioFile"]
         else:
-            logger.warning("FAILED GET PROFILE STAT")
+            logger.warning("Failed to get profile stats.")
 
 
 async def get_post_list(
@@ -222,7 +320,7 @@ async def get_post_list(
             send_headers["Cookie"] = conf.cookie
             send_headers["Authorization"] = conf.authorization
         url = BOOSTY_API_BASE_URL + f"/v1/blog/{creator_name}/post/"
-        logger.info("GET " + url + f" offset={offset}")
+        logger.info("Get " + url + f" offset={offset}")
         resp = await session.get(
             url,
             params=params,
@@ -232,7 +330,7 @@ async def get_post_list(
             raise Exception(f"{resp.status} on get posts")
         result = await resp.json()
     except Exception as e:
-        logger.error("Failed get posts", exc_info=e)
+        logger.error("Failed to get posts", exc_info=e)
         result = None
     return result
 
@@ -243,7 +341,7 @@ async def get_all_posts(
     use_cookie: bool,
     offset: Optional[str] = None,
 ):
-    logger.info(f"get posts for {creator_name}")
+    logger.info(f"Get posts for {creator_name}")
     async with ClientSession() as session:
         for i in range(10):
             resp = await get_post_list(
@@ -320,7 +418,7 @@ async def get_all_posts(
                 post_pool.close()
             post_pool.set_offset(extra["offset"])
             return
-        logger.error("Break posts get due errors")
+        logger.error("Stop getting posts due to errors.")
 
 
 async def fetch_post_by_id(
@@ -335,18 +433,17 @@ async def fetch_post_by_id(
             send_headers["Cookie"] = conf.cookie
             send_headers["Authorization"] = conf.authorization
         url = BOOSTY_API_BASE_URL + f"/v1/blog/{creator_name}/post/{post_id}"
-        logger.info("GET " + url)
+        logger.info("Get " + url)
         resp = await session.get(
             url,
             headers=send_headers
         )
         if resp.status != 200:
-            raise Exception(f"{resp.status} on get post by id")
+            return None, resp.status
         result = await resp.json()
+        return result, resp.status
     except Exception as e:
-        logger.error("Failed get posts", exc_info=e)
-        result = None
-    return result
+        return None, None
 
 
 async def get_post_by_id(
@@ -356,16 +453,19 @@ async def get_post_by_id(
     use_cookie: bool,
     offset: Optional[str] = None,
 ):
-    logger.info(f"get posts for {creator_name}")
+    logger.info(f"Get posts for {creator_name}")
     async with ClientSession() as session:
         for i in range(10):
-            resp = await fetch_post_by_id(
+            resp, status = await fetch_post_by_id(
                 session=session,
                 creator_name=creator_name,
                 post_id=post_id,
                 use_cookie=use_cookie,
             )
+            if status == 404:
+                return "not_found"
             if not resp:
+                await asyncio.sleep(0.3)
                 continue
 
             if resp["hasAccess"]:
@@ -415,4 +515,5 @@ async def get_post_by_id(
                         new_post.add_link(media["content"], media["url"])
                 post_pool.add_post(new_post, offset)
             post_pool.close()
-            return
+            return "ok"
+        return "error"

@@ -160,7 +160,7 @@ class SyncData:
                     await sd.set_runtime_posts_offset(obj["runtime_posts_offset"])
 
                 except KeyError as e:
-                    logger.error(f"Unknown meta file format, failed to parse. Missing key: {e}")
+                    logger.error(f"Unknown meta file format; failed to parse. Missing key: {e}")
                     return None
         except FileNotFoundError:
             logger.warning(f"Meta file does not exist at {path}")

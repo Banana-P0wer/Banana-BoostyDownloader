@@ -32,11 +32,16 @@ class Config:
     storage_type: Literal["post", "media"]
     desired_post_id: Optional[str]
     creator_name: Optional[str]
+    post_link: Optional[str]
+    links_file: Optional[str]
+    auto_confirm_download: bool
 
     save_logs_to_file: bool
     post_text_in_markdown: bool
     save_metadata: bool
     logs_path: Path
+    final_statistics_table: bool
+    progress_bar: bool
 
     default_sd_file_name: str
 
@@ -56,17 +61,30 @@ class Config:
         self.__arg_parser.add_argument(
             '-a',
             '--author',
-            help="Specify the creator boosty link or user name to avoid prompt."
+            help="Specify the creator user name to avoid prompt."
+        )
+        self.__arg_parser.add_argument(
+            '-l',
+            '--link',
+            help="Specify the full boosty link to auto-detect author and post id."
+        )
+        self.__arg_parser.add_argument(
+            '-f',
+            '--file',
+            help="Specify a file path with boosty post links (one per line)."
         )
         self.__load()
 
     def __load(self):
         cfg_path = "./config.yml"
+        self.links_file = None
         if os.getenv("TESTING") != "1":
             args = self.__arg_parser.parse_args()
             cfg_path = args.config or cfg_path
             self.desired_post_id = args.post_id
             self.creator_name = args.author
+            self.post_link = args.link
+            self.links_file = args.file
 
         self.__cfg_path = Path(cfg_path)
         try:
@@ -96,10 +114,13 @@ class Config:
         self.need_load_audio = True
         self.need_load_files = True
         self.storage_type = content_conf.get("storage_type")
+        self.auto_confirm_download = bool(content_conf.get("auto_confirm_download", False))
         self.post_text_in_markdown = bool(content_conf.get("post_text_in_markdown", True))
         self.save_metadata = bool(content_conf.get("save_metadata", True))
         self.save_logs_to_file = bool(logging_conf.get("enable_file_logging", False))
         self.logs_path = Path(logging_conf.get("logs_path", "./"))
+        self.final_statistics_table = bool(logging_conf.get("final_statistics_table", True))
+        self.progress_bar = bool(logging_conf.get("progress_bar", True))
         self.debug = bool(logging_conf.get("debug", False))
         collect: Optional[List[str]] = content_conf.get("collect", "media")
         if collect:

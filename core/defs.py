@@ -14,6 +14,8 @@ class AsciiCommands(str, Enum):
     COLORIZE_DEFAULT = '\033[0m'
     COLORIZE_WARN = '\033[91m'
     COLORIZE_HIGHLIGHT = '\033[92m'
+    COLORIZE_WARNING = '\033[93m'
+    COLORIZE_ERROR = '\033[91m'
 
 
 class ContentType(str, Enum):

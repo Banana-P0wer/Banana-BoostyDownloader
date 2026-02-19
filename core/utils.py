@@ -11,7 +11,7 @@ from core.logger import logger
 
 def create_dir_if_not_exists(path: Path):
     if not os.path.isdir(path):
-        logger.info(f"create directory: {path}")
+        logger.info(f"Create directory: {path}")
         os.mkdir(path)
 
 
@@ -21,11 +21,16 @@ async def create_text_document(path: Path, content: str, ext: str = "txt", name:
         await file.write(content)
 
 
+def parse_boosty_link(raw_input: str) -> tuple[str, Optional[str]]:
+    match = re.search(r"boosty\.to/([^/\s]+)/?(?:posts/([0-9a-fA-F-]+))?", raw_input)
+    if match is None:
+        return raw_input, None
+    return match.group(1), match.group(2)
+
+
 def parse_creator_name(raw_input: str) -> str:
-    search = re.search(r"^.*?(boosty\.to/(.*?)/?)$", raw_input)
-    if search is None:
-        return raw_input
-    return search.group(2)
+    creator_name, _ = parse_boosty_link(raw_input)
+    return creator_name
 
 
 def parse_bool(raw_input: str) -> bool:
@@ -63,9 +68,7 @@ def print_summary(
     need_load_files: bool,
     storage_type: str,
 ):
-    print("Ok, working with", end=" ")
-    print_colorized("", creator_name, end=", ")
-    print("home directory:", end=" ")
+    print("Ok, home directory:", end=" ")
     print_colorized("", sync_dir, end=" ")
     print("sync type:", end=" ")
     print_colorized("", storage_type)
@@ -87,5 +90,5 @@ def parse_offset_time(offset: str) -> Optional[int]:
         parts = offset.split(":")
         return int(parts[0])
     except Exception as e:
-        logger.error(f"Failed parse offset {offset}", exc_info=e)
+        logger.error(f"Failed to parse offset {offset}", exc_info=e)
         return None

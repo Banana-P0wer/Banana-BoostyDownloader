@@ -32,7 +32,7 @@ def test_create_dir_if_not_exists_not_exists(mock_logger, mock_mkdir, mock_isdir
     path = Path("/new/dir")
     create_dir_if_not_exists(path)
     mock_mkdir.assert_called_once_with(path)
-    mock_logger.assert_called_once_with(f"create directory: {path}")
+    mock_logger.assert_called_once_with(f"Create directory: {path}")
 
 
 # Тесты для create_text_document
@@ -99,32 +99,24 @@ def test_print_summary(mock_print_colorized):
     creator_name = "test_creator"
     use_cookie = True
     sync_dir = "/test/dir"
-    download_timeout = 120
     need_load_video = True
     need_load_photo = False
     need_load_audio = True
     need_load_files = False
     storage_type = "local"
-    post_masquerade = False
-    sync_offset_save = False
-    video_size_restriction = "no_restrict"
 
     print_summary(
         creator_name,
         use_cookie,
         sync_dir,
-        download_timeout,
         need_load_video,
         need_load_photo,
         need_load_audio,
         need_load_files,
-        post_masquerade,
-        sync_offset_save,
-        video_size_restriction,
         storage_type,
     )
 
-    assert mock_print_colorized.call_count == 12
+    assert mock_print_colorized.call_count == 7
 
 
 # Тесты для parse_offset_time
@@ -137,7 +129,7 @@ def test_parse_offset_time_valid(mock_logger_error):
 @patch("core.logger.logger.error")
 def test_parse_offset_time_invalid(mock_logger_error):
     assert parse_offset_time("invalid") is None
-    mock_logger_error.assert_called_once_with("Failed parse offset invalid")
+    mock_logger_error.assert_called_once_with("Failed to parse offset invalid")
 
 
 @patch("core.logger.logger.error")

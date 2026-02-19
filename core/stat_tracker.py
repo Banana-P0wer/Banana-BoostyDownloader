@@ -24,6 +24,7 @@ class StatTracker:
     total_audios: int = 0
 
     __download_errors: list = []
+    __incomplete_files: list = []
 
     def add_downloaded_photo(self):
         self.__downloaded_photo += 1
@@ -63,6 +64,19 @@ class StatTracker:
 
     def add_download_error(self, file_url: str):
         self.__download_errors.append(file_url)
+
+    def add_incomplete_file(self, file_path: str):
+        if file_path not in self.__incomplete_files:
+            self.__incomplete_files.append(file_path)
+
+    def get_incomplete_files(self):
+        return list(self.__incomplete_files)
+
+    def get_incomplete_count(self) -> int:
+        return len(self.__incomplete_files)
+
+    def clear_incomplete_files(self):
+        self.__incomplete_files.clear()
 
     def __str__(self):
         photo_stat = [
@@ -115,6 +129,31 @@ class StatTracker:
 
     def show_summary(self):
         print("\n\n" + self.__str__())
+
+    def get_counters(self):
+        downloaded = (
+            self.__downloaded_photo +
+            self.__downloaded_video +
+            self.__downloaded_audio +
+            self.__downloaded_file
+        )
+        passed = (
+            self.__passed_photo +
+            self.__passed_video +
+            self.__passed_audio +
+            self.__passed_file
+        )
+        errors = (
+            self.__error_photo +
+            self.__error_video +
+            self.__error_audio +
+            self.__error_file
+        )
+        return {
+            "downloaded": downloaded,
+            "passed": passed,
+            "errors": errors,
+        }
 
 
 """ 
